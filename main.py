@@ -1,197 +1,117 @@
-import os
-from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import Updater, CommandHandler, CallbackQueryHandler, MessageHandler, Filters, CallbackContext
-import firebase_admin
-from firebase_admin import credentials, firestore
+import asyncio
+import aiohttp
+import random
+import time
+from tqdm import tqdm
+from aiogram import Bot, Dispatcher, types
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.utils import executor
 
-# Firebase setup
-cred_json = os.getenv("FIREBASE_CREDENTIALS_JSON")
-if not cred_json:
-    raise ValueError("FIREBASE_CREDENTIALS_JSON environment variable not set.")
+# Telegram Bot Token
+BOT_TOKEN = "7781500138:AAHD7j2Pg-I88HX5h55sdcenVJTdE3lKaww"
 
-cred = credentials.Certificate(json.loads(cred_json))
-firebase_admin.initialize_app(cred, {
-    'databaseURL': 'https://myid-9e87b-default-rtdb.asia-southeast1.firebasedatabase.app'
-})
-db = firestore.client()
+# API URLs
+fetch_url = "https://example.com/get_numbers"  # Replace with actual API URL
+send_url = "https://example.com/api"  # Replace with actual API URL
 
-# List of admin IDs
-ADMIN_IDS = ["5084989466", "987654321"]  # Replace with actual Telegram user IDs of admins
+# Concurrency & Retry Settings
+MAX_CONCURRENT_REQUESTS = 50
+MAX_RETRIES = 3
+RETRY_DELAY = [1, 3, 5]
 
-# Verify admin
-def is_admin(user_id):
-    return str(user_id) in ADMIN_IDS
+# Global Counters & Task Tracking
+success_count = 0
+fail_count = 0
+error_log = []
+processing = False  # Track if a process is running
 
-# Start command
-def start(update: Update, context: CallbackContext):
-    user_id = str(update.effective_user.id)
-    username = update.effective_user.username
+# Bot Initialization
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher(bot)
 
-    user_ref = db.collection('users').document(user_id)
-    user = user_ref.get()
+# Start Keyboard
+keyboard = ReplyKeyboardMarkup(resize_keyboard=True)
+keyboard.add(KeyboardButton("/start_process"), KeyboardButton("/status"))
 
-    if not user.exists:
-        user_ref.set({
-            'username': username,
-            'balance': 0
-        })
-        update.message.reply_text(f"Account created for {username}. Balance: 0")
+async def fetch_numbers():
+    """Fetch phone numbers from API."""
+    async with aiohttp.ClientSession() as session:
+        async with session.get(fetch_url) as response:
+            if response.status == 200:
+                return await response.json()
+            return []
+
+async def send_request(session, phone, semaphore):
+    """Send request with retries."""
+    global success_count, fail_count
+    async with semaphore:
+        for attempt in range(MAX_RETRIES):
+            try:
+                async with session.get(f"{send_url}?phone={phone}") as response:
+                    if response.status == 200:
+                        success_count += 1
+                        return
+                    else:
+                        print(f"Error {response.status} for {phone}, retrying ({attempt+1}/{MAX_RETRIES})")
+            except Exception as e:
+                print(f"Network error: {e}, retrying ({attempt+1}/{MAX_RETRIES})")
+
+            await asyncio.sleep(random.choice(RETRY_DELAY))
+
+        # If all retries fail
+        fail_count += 1
+        error_log.append(phone)
+
+async def process_numbers():
+    """Process numbers asynchronously."""
+    global processing, success_count, fail_count
+    processing = True
+    success_count, fail_count = 0, 0
+
+    phone_numbers = await fetch_numbers()
+    if not phone_numbers:
+        processing = False
+        return "No numbers to process."
+
+    total_numbers = len(phone_numbers)
+    semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+
+    async with aiohttp.ClientSession() as session:
+        tasks = [send_request(session, phone, semaphore) for phone in phone_numbers]
+        await asyncio.gather(*tasks)
+
+    processing = False
+    return f"✅ Done! Success: {success_count}, ❌ Failed: {fail_count}"
+
+@dp.message_handler(commands=['start'])
+async def start_command(message: types.Message):
+    """Start command - Show options."""
+    await message.reply("Welcome! Use /start_process to begin or /status to check progress.", reply_markup=keyboard)
+
+@dp.message_handler(commands=['start_process'])
+async def start_process(message: types.Message):
+    """Start the process."""
+    global processing
+    if processing:
+        await message.reply("⚙️ Already running... Use /status to check progress.")
     else:
-        user_data = user.to_dict()
-        update.message.reply_text(f"Welcome back, {username}! Balance: {user_data['balance']}")
+        await message.reply("🚀 Starting process...")
+        asyncio.create_task(run_process(message.chat.id))
 
-    if is_admin(user_id):
-        show_admin_menu(update, context)
+async def run_process(chat_id):
+    """Run process and notify user when done."""
+    result = await process_numbers()
+    await bot.send_message(chat_id, result)
+
+@dp.message_handler(commands=['status'])
+async def status_command(message: types.Message):
+    """Check status."""
+    if processing:
+        await message.reply(f"🔄 Processing...\n✅ Success: {success_count}\n❌ Failed: {fail_count}")
     else:
-        show_main_menu(update, context)
+        await message.reply(f"✅ Done!\nSuccess: {success_count}\nFailed: {fail_count}")
 
-# Show main menu for users
-def show_main_menu(update: Update, context: CallbackContext):
-    games_ref = db.collection('games')
-    games = games_ref.stream()
-
-    keyboard = [[InlineKeyboardButton(game.to_dict()['name'], callback_data=f"game_{game.id}")] for game in games]
-
-    update.message.reply_text("Choose a game:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-# Show admin menu
-def show_admin_menu(update: Update, context: CallbackContext):
-    keyboard = [
-        [InlineKeyboardButton("View Users", callback_data="admin_view_users")],
-        [InlineKeyboardButton("Recharge User", callback_data="admin_recharge_user")],
-        [InlineKeyboardButton("Add Game", callback_data="admin_add_game")],
-        [InlineKeyboardButton("Add Item", callback_data="admin_add_item")],
-        [InlineKeyboardButton("Update Item", callback_data="admin_update_item")],
-        [InlineKeyboardButton("View Orders", callback_data="admin_view_orders")]
-    ]
-
-    update.message.reply_text("Admin Menu:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-# Handle game selection
-def game_selected(update: Update, context: CallbackContext):
-    query = update.callback_query
-    game_id = query.data.split('_')[1]
-
-    items_ref = db.collection('items').where('game_id', '==', game_id)
-    items = items_ref.stream()
-
-    keyboard = [[InlineKeyboardButton(f"{item.to_dict()['name']} - {item.to_dict()['price']} coins", callback_data=f"item_{item.id}_{game_id}")] for item in items]
-
-    query.edit_message_text("Select an item:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-# Handle item selection
-def item_selected(update: Update, context: CallbackContext):
-    query = update.callback_query
-    item_id, game_id = query.data.split('_')[1:]
-
-    context.user_data['item_id'] = item_id
-    context.user_data['game_id'] = game_id
-
-    query.edit_message_text("Enter your game ID:")
-
-# Handle game ID input
-def game_id_input(update: Update, context: CallbackContext):
-    game_id = context.user_data.get('game_id')
-    item_id = context.user_data.get('item_id')
-    user_id = str(update.effective_user.id)
-    game_user_id = update.message.text
-
-    item_ref = db.collection('items').document(item_id)
-    item = item_ref.get().to_dict()
-
-    user_ref = db.collection('users').document(user_id)
-    user = user_ref.get().to_dict()
-
-    if user['balance'] >= item['price']:
-        new_balance = user['balance'] - item['price']
-        user_ref.update({'balance': new_balance})
-
-        db.collection('transactions').add({
-            'user_id': user_id,
-            'item_id': item_id,
-            'game_id': game_id,
-            'amount': item['price'],
-            'status': 'completed',
-            'game_user_id': game_user_id
-        })
-
-        update.message.reply_text(f"Purchase successful! {item['name']} bought for {item['price']} coins. Remaining balance: {new_balance}")
-    else:
-        update.message.reply_text("Insufficient balance!")
-
-# Admin commands
-# Get all users
-def get_all_users():
-    users_ref = db.collection('users')
-    users = users_ref.stream()
-    return [user.to_dict() for user in users]
-
-# Recharge user
-def recharge_user(user_id, amount):
-    user_ref = db.collection('users').document(user_id)
-    user = user_ref.get()
-    if user.exists:
-        new_balance = user.to_dict()['balance'] + amount
-        user_ref.update({'balance': new_balance})
-        return True
-    return False
-
-# Add game
-def add_game(game_name):
-    db.collection('games').add({'name': game_name})
-
-# Add item
-def add_item(game_id, item_name, price):
-    db.collection('items').add({
-        'game_id': game_id,
-        'name': item_name,
-        'price': price
-    })
-
-# Update item info
-def update_item(item_id, new_name=None, new_price=None):
-    item_ref = db.collection('items').document(item_id)
-    updates = {}
-    if new_name:
-        updates['name'] = new_name
-    if new_price:
-        updates['price'] = new_price
-    if updates:
-        item_ref.update(updates)
-
-# View orders
-def view_orders():
-    transactions_ref = db.collection('transactions')
-    transactions = transactions_ref.stream()
-    return [trans.to_dict() for trans in transactions]
-
-# Admin command wrapper
-def admin_only(func):
-    def wrapper(update: Update, context: CallbackContext, *args, **kwargs):
-        user_id = str(update.effective_user.id)
-        if not is_admin(user_id):
-            update.message.reply_text("Unauthorized access. Admins only.")
-            return
-        return func(update, context, *args, **kwargs)
-    return wrapper
-
-# Main function
-def main():
-    bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not bot_token:
-        raise ValueError("TELEGRAM_BOT_TOKEN environment variable not set.")
-
-    updater = Updater(bot_token)
-
-    dispatcher = updater.dispatcher
-
-    dispatcher.add_handler(CommandHandler("start", start))
-    dispatcher.add_handler(CallbackQueryHandler(game_selected, pattern="^game_"))
-    dispatcher.add_handler(CallbackQueryHandler(item_selected, pattern="^item_"))
-    dispatcher.add_handler(MessageHandler(Filters.text & ~Filters.command, game_id_input))
-
-    updater.start_polling()
-    updater.idle()
-
+# Start bot
 if __name__ == "__main__":
-    main()
+    executor.start_polling(dp, skip_updates=True)
+    
