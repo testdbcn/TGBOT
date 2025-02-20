@@ -11,8 +11,8 @@ from aiogram.utils import executor
 BOT_TOKEN = "7781500138:AAHD7j2Pg-I88HX5h55sdcenVJTdE3lKaww"
 
 # API URLs
-fetch_url = "https://example.com/get_numbers"  # Replace with actual API URL
-send_url = "https://example.com/api"  # Replace with actual API URL
+fetch_url = "https://api.xalyon.xyz/v2/phone"  # Replace with actual API URL
+send_url = "https://api.xalyon.xyz/v2/refresh/"  # Replace with actual API URL
 
 # Concurrency & Retry Settings
 MAX_CONCURRENT_REQUESTS = 50
