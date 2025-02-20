@@ -1,9 +1,8 @@
 import asyncio
 import aiohttp
 import random
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, executor  # Correct executor import
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.utils import executor  # Added missing import
 
 # Telegram Bot Token
 BOT_TOKEN = "7781500138:AAHD7j2Pg-I88HX5h55sdcenVJTdE3lKaww"
@@ -21,7 +20,7 @@ RETRY_DELAY = [1, 3, 5]
 success_count = 0
 fail_count = 0
 error_log = []
-processing = False  # Track if a process is running
+processing = False
 
 # Bot Initialization
 bot = Bot(token=BOT_TOKEN)
@@ -53,10 +52,7 @@ async def send_request(session, phone, semaphore):
                         print(f"Error {response.status} for {phone}, retrying ({attempt+1}/{MAX_RETRIES})")
             except Exception as e:
                 print(f"Network error: {e}, retrying ({attempt+1}/{MAX_RETRIES})")
-
             await asyncio.sleep(random.choice(RETRY_DELAY))
-
-        # If all retries fail
         fail_count += 1
         error_log.append(phone)
 
@@ -69,51 +65,40 @@ async def process_numbers():
     try:
         phone_numbers = await fetch_numbers()
         if not phone_numbers:
-            processing = False
             return "No numbers to process."
 
-        total_numbers = len(phone_numbers)
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
-
         async with aiohttp.ClientSession() as session:
             tasks = [send_request(session, phone, semaphore) for phone in phone_numbers]
             await asyncio.gather(*tasks)
-
+        return f"✅ Done! Success: {success_count}, ❌ Failed: {fail_count}"
     except Exception as e:
-        return f"⚠️ Error processing numbers: {str(e)}"
+        return f"⚠️ Error: {str(e)}"
     finally:
         processing = False
 
-    return f"✅ Done! Success: {success_count}, ❌ Failed: {fail_count}"
-
 @dp.message_handler(commands=['start'])
 async def start_command(message: types.Message):
-    """Start command - Show options."""
     await message.reply("Welcome! Use /start_process to begin or /status to check progress.", reply_markup=keyboard)
 
 @dp.message_handler(commands=['start_process'])
 async def start_process(message: types.Message):
-    """Start the process."""
     global processing
     if processing:
-        await message.reply("⚙️ Already running... Use /status to check progress.")
+        await message.reply("⚙️ Already running...")
     else:
         await message.reply("🚀 Starting process...")
         asyncio.create_task(run_process(message.chat.id))
 
 async def run_process(chat_id):
-    """Run process and notify user when done."""
     result = await process_numbers()
     await bot.send_message(chat_id, result)
 
 @dp.message_handler(commands=['status'])
 async def status_command(message: types.Message):
-    """Check status."""
-    if processing:
-        await message.reply(f"🔄 Processing...\n✅ Success: {success_count}\n❌ Failed: {fail_count}")
-    else:
-        await message.reply(f"✅ Done!\nSuccess: {success_count}\nFailed: {fail_count}")
+    status_msg = f"🔄 Processing...\n✅ Success: {success_count}\n❌ Failed: {fail_count}" if processing \
+        else f"✅ Done!\nSuccess: {success_count}\nFailed: {fail_count}"
+    await message.reply(status_msg)
 
-# Start bot
 if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)  # Fixed typo in parameter name
+    executor.start_polling(dp, skip_updates=True)
