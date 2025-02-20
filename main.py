@@ -1,22 +1,16 @@
 import asyncio
 import aiohttp
 import random
-import time
-from tqdm import tqdm
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-import asyncio
-
-async def main():
-    await dp.start_poll
-    
+from aiogram.utils import executor  # Added missing import
 
 # Telegram Bot Token
 BOT_TOKEN = "7781500138:AAHD7j2Pg-I88HX5h55sdcenVJTdE3lKaww"
 
 # API URLs
-fetch_url = "https://api.xalyon.xyz/v2/phone"  # Replace with actual API URL
-send_url = "https://api.xalyon.xyz/v2/refresh/"  # Replace with actual API URL
+fetch_url = "https://api.xalyon.xyz/v2/phone"
+send_url = "https://api.xalyon.xyz/v2/refresh/"
 
 # Concurrency & Retry Settings
 MAX_CONCURRENT_REQUESTS = 50
@@ -72,19 +66,24 @@ async def process_numbers():
     processing = True
     success_count, fail_count = 0, 0
 
-    phone_numbers = await fetch_numbers()
-    if not phone_numbers:
+    try:
+        phone_numbers = await fetch_numbers()
+        if not phone_numbers:
+            processing = False
+            return "No numbers to process."
+
+        total_numbers = len(phone_numbers)
+        semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
+
+        async with aiohttp.ClientSession() as session:
+            tasks = [send_request(session, phone, semaphore) for phone in phone_numbers]
+            await asyncio.gather(*tasks)
+
+    except Exception as e:
+        return f"⚠️ Error processing numbers: {str(e)}"
+    finally:
         processing = False
-        return "No numbers to process."
 
-    total_numbers = len(phone_numbers)
-    semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
-
-    async with aiohttp.ClientSession() as session:
-        tasks = [send_request(session, phone, semaphore) for phone in phone_numbers]
-        await asyncio.gather(*tasks)
-
-    processing = False
     return f"✅ Done! Success: {success_count}, ❌ Failed: {fail_count}"
 
 @dp.message_handler(commands=['start'])
@@ -117,5 +116,4 @@ async def status_command(message: types.Message):
 
 # Start bot
 if __name__ == "__main__":
-    executor.start_polling(dp, skip_updates=True)
-    
+    executor.start_polling(dp, skip_updates=True)  # Fixed typo in parameter name
