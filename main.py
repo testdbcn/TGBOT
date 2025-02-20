@@ -5,7 +5,11 @@ import time
 from tqdm import tqdm
 from aiogram import Bot, Dispatcher, types
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
-from aiogram.utils import executor
+import asyncio
+
+async def main():
+    await dp.start_poll
+    
 
 # Telegram Bot Token
 BOT_TOKEN = "7781500138:AAHD7j2Pg-I88HX5h55sdcenVJTdE3lKaww"
