@@ -1,7 +1,8 @@
 import asyncio
 import aiohttp
 import random
-from aiogram import Bot, Dispatcher, types, executor  # Correct executor import
+from aiogram import Bot, Dispatcher, types
+from aiogram.utils import executor
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 
 # Telegram Bot Token
@@ -96,8 +97,9 @@ async def run_process(chat_id):
 
 @dp.message_handler(commands=['status'])
 async def status_command(message: types.Message):
-    status_msg = f"🔄 Processing...\n✅ Success: {success_count}\n❌ Failed: {fail_count}" if processing \
-        else f"✅ Done!\nSuccess: {success_count}\nFailed: {fail_count}"
+    status_msg = (f"🔄 Processing...\n✅ Success: {success_count}\n❌ Failed: {fail_count}"
+                  if processing else
+                  f"✅ Done!\nSuccess: {success_count}\nFailed: {fail_count}")
     await message.reply(status_msg)
 
 if __name__ == "__main__":
